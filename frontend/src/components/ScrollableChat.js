@@ -1,6 +1,7 @@
 import { Box, useBreakpointValue } from "@chakra-ui/react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useMemo } from "react";
 import { ChatState } from "../Context/ChatProvider";
+import { getTicks } from "../config/ChatLogics";
 
 // WhatsApp‑style ticks
 const TICK_COLORS = {
@@ -57,9 +58,24 @@ const isMine = (m, user) => {
   );
 };
 
-const ScrollableChat = ({ messages }) => {
+const colorPool = ["#e91e63","#9c27b0","#3f51b5","#03a9f4","#009688","#ff9800","#795548","#607d8b","#2b6cb0","#d97706"];
+const pickColor = (id = "") => {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) & 0xffffffff;
+  return colorPool[Math.abs(hash) % colorPool.length];
+};
+
+const ScrollableChat = ({ messages, isGroup, participants }) => {
   const { user } = ChatState();
   const endRef = useRef(null);
+  const participantsMap = useMemo(() => {
+    const map = {};
+    (participants || []).forEach(p => {
+      const pid = p._id || p.id;
+      if (pid) map[pid] = p;
+    });
+    return map;
+  }, [participants]);
 
   // Responsive message bubble max width
   const bubbleMaxW = useBreakpointValue({
@@ -86,9 +102,16 @@ const ScrollableChat = ({ messages }) => {
       // Allow space for mobile safe-area (iOS notch)
       pb={`calc(env(safe-area-inset-bottom, 0px) + 8px)`}
     >
-      {messages.map((m) => {
+      {messages.map((m, i) => {
+        const ticks = getTicks(m, user._id, participants.length);
         const mine = isMine(m, user);
         const status = mine ? (m.status || "sent") : undefined;
+        let sender = m.sender;
+        if (typeof sender === "string") sender = participantsMap[sender] || { _id: sender };
+        const senderName = sender?.name || sender?.username || "Unknown";
+        const senderId =
+          typeof sender === "object" ? sender._id || sender.id || sender._id : sender;
+        const nameColor = pickColor(senderId || "");
         return (
           <Box
             key={m._id}
@@ -107,21 +130,42 @@ const ScrollableChat = ({ messages }) => {
               fontSize={fontSize}
               boxShadow="sm"
               position="relative"
-              whiteSpace="pre-wrap"
               wordBreak="break-word"
             >
-              {m.content}
-              {mine && (
-                <Box
-                  display="flex"
-                  alignItems="center"
-                  justifyContent="flex-end"
-                  mt={1}
-                  fontSize="10px"
-                >
-                  <StatusTicks status={status} />
+              {isGroup && !mine && (
+                <Box mb={1}>
+                  <Box
+                    as="span"
+                    fontSize="11px"
+                    fontWeight="600"
+                    color={nameColor}
+                  >
+                    {senderName}
+                  </Box>
                 </Box>
               )}
+              <Box
+                display="flex"
+                alignItems="flex-end"
+                fontSize={fontSize}
+              >
+                <Box
+                  as="span"
+                  flex="1"
+                  whiteSpace="pre-wrap"
+                >
+                  {m.content}
+                </Box>
+                {mine && (
+                  <Box
+                    ml={2}
+                    display="inline-flex"
+                    alignItems="flex-end"
+                  >
+                    <StatusTicks status={status} />
+                  </Box>
+                )}
+              </Box>
             </Box>
           </Box>
         );

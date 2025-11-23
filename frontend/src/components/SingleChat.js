@@ -4,31 +4,37 @@ import { Box, Text } from "@chakra-ui/layout";
 import "./styles.css";
 import { IconButton, Spinner, useToast } from "@chakra-ui/react";
 import { getSender, getSenderFull } from "../config/ChatLogics";
-import { useEffect, useState } from "react";
-import axios from "axios";
+import React, { useState, useEffect, useRef, useCallback } from "react";
+import { ChatState } from "../Context/ChatProvider";
 import { ArrowBackIcon, ArrowForwardIcon } from "@chakra-ui/icons";
 import ProfileModal from "./miscellaneous/ProfileModal";
 import ScrollableChat from "./ScrollableChat";
 import Lottie from "react-lottie";
 import animationData from "../animations/typing.json";
-import io from "socket.io-client";
-import UpdateGroupChatModal from "./miscellaneous/UpdateGroupChatModal";
-import { ChatState } from "../Context/ChatProvider";
+import UpdateGroupChatModal from "./UpdateGroupChatModal";
 
-const ENDPOINT = "http://localhost:5000";
-let socket, selectedChatCompare;
+// Removed unused io / ENDPOINT (socket comes from context)
 
 const SingleChat = ({ fetchAgain, setFetchAgain }) => {
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
   const [newMessage, setNewMessage] = useState("");
-  const [socketConnected, setSocketConnected] = useState(false);
   const [typing, setTyping] = useState(false);
   const [istyping, setIsTyping] = useState(false);
   const toast = useToast();
 
-  const { selectedChat, setSelectedChat, user, notification, setNotification, chats, setChats } =
-    ChatState();
+  const {
+    selectedChat,
+    setSelectedChat,
+    user,
+    socket,
+    setChats,
+    notifications,
+    setNotifications,
+    socketConnected: ctxSocketConnected,
+    api
+  } = ChatState();
+  // Removed notification (unused). Add back if you display it.
 
   const defaultOptions = {
     loop: true,
@@ -37,72 +43,63 @@ const SingleChat = ({ fetchAgain, setFetchAgain }) => {
     rendererSettings: { preserveAspectRatio: "xMidYMid slice" },
   };
 
-  const fetchMessages = async () => {
-    if (!selectedChat) return;
-    try {
-      const config = { headers: { Authorization: `Bearer ${user.token}` } };
-      setLoading(true);
-      const { data } = await axios.get(`/api/message/${selectedChat._id}`, config);
-      setMessages(data); // no fallback
-      setLoading(false);
-      socket.emit("join chat", selectedChat._id);
-      // mark seen in DB
-      await axios.post(
-        "/api/message/seen",
-        { chatId: selectedChat._id },
-        config
-      );
-    } catch (error) {
-      toast({
-        title: "Error Occured!",
-        description: "Failed to Load the Messages",
-        status: "error",
-        duration: 5000,
-        isClosable: true,
-        position: "bottom",
-      });
-    }
-  };
+  // Track current chat id to compare in socket events
+  const activeChatIdRef = useRef(null);
+  const messageIdsRef = useRef(new Set());
 
-  const sendMessage = async () => {
-    if (!newMessage.trim()) return;
-    socket.emit("stop typing", selectedChat._id);
+  // Dedup + stable callback
+  const addMessageSafe = useCallback((msg) => {
+    const id = msg?._id;
+    if (!id) {
+      setMessages(prev => [...prev, msg]);
+      return;
+    }
+    if (messageIdsRef.current.has(id)) return;
+    messageIdsRef.current.add(id);
+    setMessages(prev => [...prev, msg]);
+  }, []);
+
+  // fetchMessages wrapped; include user token dependency if token used inside
+  const fetchMessages = useCallback(async () => {
+    const id = selectedChat?._id;
+    if (!id || id.length !== 24) return; // skip invalid id
     try {
-      const config = {
-        headers: {
-          "Content-type": "application/json",
-          Authorization: `Bearer ${user.token}`,
-        },
-      };
-      const content = newMessage;
+      setLoading(true);
+      const { data } = await api.get(`/message/${id}`);
+      setMessages(data);
+      setLoading(false);
+      socket?.emit("join chat", id);
+    } catch {
+      setLoading(false);
+    }
+  }, [selectedChat, api, socket]);
+
+  // sendMessage function (replace current POST)
+  const sendMessage = async () => {
+    const text = newMessage.trim();
+    if (!text || !selectedChat?._id) return;
+    try {
       setNewMessage("");
-      const { data } = await axios.post(
-        "/api/message",
-        { content, chatId: selectedChat._id },
-        config
-      );
-      // no socket.emit("new message") needed
-      setMessages((prev) => [...prev, data]);
-      setChats((prev) =>
-        prev.map((c) =>
-          c._id === selectedChat._id ? { ...c, latestMessage: data } : c
-        )
-      );
-    } catch (error) {
+      const { data } = await api.post("/message", {
+        content: text,
+        chatId: selectedChat._id,
+      });
+      addMessageSafe(data);
+      socket?.emit("new message", data);
+    } catch (e) {
+      console.log("sendMessage 400 debug", e.response?.status, e.response?.data);
       toast({
-        title: "Error Occured!",
-        description: "Failed to send the Message",
+        title: "Send failed",
         status: "error",
-        duration: 5000,
+        duration: 2000,
         isClosable: true,
-        position: "bottom",
       });
     }
   };
 
   const typingHandler = (e) => {
     setNewMessage(e.target.value);
-    if (!socketConnected) return;
+    if (!ctxSocketConnected) return;
     if (!typing) {
       setTyping(true);
       socket.emit("typing", selectedChat._id);
@@ -119,68 +116,75 @@ const SingleChat = ({ fetchAgain, setFetchAgain }) => {
     }, timerLength);
   };
 
+  // Listener effect (replace the crashing one)
   useEffect(() => {
-    socket = io(ENDPOINT);
-    socket.emit("setup", user);
-    socket.on("connected", () => setSocketConnected(true));
-    socket.on("typing", () => setIsTyping(true));
-    socket.on("stop typing", () => setIsTyping(false));
+    if (!socket) return; // guard against null
+    const handleTyping = () => setIsTyping(true);
+    const handleStopTyping = () => setIsTyping(false);
+    socket.on("typing", handleTyping);
+    socket.on("stop typing", handleStopTyping);
     return () => {
-      socket.off("connected");
-      socket.off("typing");
-      socket.off("stop typing");
+      socket.off("typing", handleTyping);
+      socket.off("stop typing", handleStopTyping);
     };
-    // eslint-disable-next-line
-  }, []);
+  }, [socket]);
 
+  // Effect that sets activeChatId / fetches messages:
   useEffect(() => {
+    activeChatIdRef.current = selectedChat?._id || null;
     fetchMessages();
-    selectedChatCompare = selectedChat;
-    // eslint-disable-next-line
-  }, [selectedChat]);
+  }, [fetchMessages, selectedChat]);
 
+  // Socket listener effect (no reassignment to socket)
   useEffect(() => {
-    socket.on("message recieved", (newMessageRecieved) => {
-      if (
-        !selectedChatCompare ||
-        selectedChatCompare._id !== newMessageRecieved.chat._id
-      ) {
-        if (!notification.find((n) => n._id === newMessageRecieved._id)) {
-          setNotification([newMessageRecieved, ...notification]);
-          setFetchAgain(!fetchAgain);
+    if (!socket) return;
+    const handleIncoming = (newMessage) => {
+      const chatId = newMessage?.chat?._id;
+      if (chatId && chatId === activeChatIdRef.current) {
+        // Ensure sender object populated
+        if (typeof newMessage.sender === "string" && selectedChat?.users) {
+          const found = selectedChat.users.find(
+            u => u._id === newMessage.sender || u.id === newMessage.sender
+          );
+            if (found) newMessage.sender = found;
         }
+        addMessageSafe(newMessage);
       } else {
-        setMessages((prev) => [...prev, newMessageRecieved]);
+        // If you reintroduce notification, handle here
+        setNotifications(prev => [newMessage, ...prev]);
       }
-      // update latestMessage for its chat
-      setChats((prev) =>
-        prev.map((c) =>
-          c._id === newMessageRecieved.chat._id
-            ? { ...c, latestMessage: newMessageRecieved }
-            : c
-        )
-      );
-    });
-
-    // delivered status update
-    socket.on("message delivered", ({ messageId }) => {
-      setMessages((prev) =>
-        prev.map((m) => (m._id === messageId && m.status === "sent" ? { ...m, status: "delivered" } : m))
-      );
-    });
-    socket.on("message seen", ({ messageIds }) => {
-      if (!messageIds?.length) return;
-      setMessages((prev) =>
-        prev.map((m) =>
-          messageIds.includes(m._id) && m.status !== "seen" ? { ...m, status: "seen" } : m
-        )
-      );
-    });
-    return () => {
-      socket.off("message delivered");
-      socket.off("message seen");
     };
-  }, []);
+    socket.on("message received", handleIncoming);
+    return () => socket.off("message received", handleIncoming);
+  }, [socket, selectedChat, addMessageSafe, setNotifications]);
+
+  // Join chat effect
+  useEffect(() => {
+    const id = selectedChat?._id;
+    if (!id || id.length !== 24) return;
+    socket?.emit("join chat", id);
+    (async () => {
+      try {
+        await api.put("/message/read", { chatId: id });
+      } catch {}
+    })();
+  }, [selectedChat, socket, api]);
+
+  // New effect for message read status
+  useEffect(() => {
+    if (!socket) return;
+    const handleRead = ({ messageIds, userId }) => {
+      setMessages(prev =>
+        prev.map(m =>
+          messageIds.includes(m._id)
+            ? { ...m, readBy: [...new Set([...(m.readBy || []), userId])] }
+            : m
+        )
+      );
+    };
+    socket.on("messages read", handleRead);
+    return () => socket.off("messages read", handleRead);
+  }, [socket]);
 
   return (
     <>
@@ -199,7 +203,7 @@ const SingleChat = ({ fetchAgain, setFetchAgain }) => {
             <IconButton
               d={{ base: "flex", md: "none" }}
               icon={<ArrowBackIcon />}
-              onClick={() => setSelectedChat("")}
+              onClick={() => setSelectedChat(null)}
               aria-label="Back"
             />
             {messages &&
@@ -213,11 +217,7 @@ const SingleChat = ({ fetchAgain, setFetchAgain }) => {
               ) : (
                 <>
                   {selectedChat.chatName.toUpperCase()}
-                  <UpdateGroupChatModal
-                    fetchMessages={fetchMessages}
-                    fetchAgain={fetchAgain}
-                    setFetchAgain={setFetchAgain}
-                  />
+                  {selectedChat?.isGroupChat && <UpdateGroupChatModal />}
                 </>
               ))}
           </Text>
@@ -236,7 +236,11 @@ const SingleChat = ({ fetchAgain, setFetchAgain }) => {
               <Spinner size="xl" w={20} h={20} alignSelf="center" margin="auto" />
             ) : (
               <div className="messages">
-                <ScrollableChat messages={messages} />
+                <ScrollableChat
+                  messages={messages}
+                  isGroup={selectedChat?.isGroupChat}
+                  participants={selectedChat?.users}
+                />
               </div>
             )}
 
@@ -269,11 +273,17 @@ const SingleChat = ({ fetchAgain, setFetchAgain }) => {
                   value={newMessage}
                   onChange={typingHandler}
                 />
+                {/*
+                  Change color based on input content.
+                  hasText => teal solid, empty => gray outline.
+                */}
                 <IconButton
                   ml={2}
                   icon={<ArrowForwardIcon />}
                   onClick={sendMessage}
                   aria-label="Send"
+                  colorScheme={newMessage.trim() ? "teal" : "gray"}
+                  variant={newMessage.trim() ? "solid" : "outline"}
                 />
               </Box>
             </FormControl>

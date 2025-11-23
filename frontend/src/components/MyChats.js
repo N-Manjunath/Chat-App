@@ -89,31 +89,33 @@ const MyChats = ({ fetchAgain }) => {
       >
         {chats ? (
           <Stack overflowY="scroll">
-            {chats.map((chat) => (
-              <Box
-                onClick={() => setSelectedChat(chat)}
-                cursor="pointer"
-                bg={selectedChat === chat ? "#40c0b9ff" : "#E8E8E8"}
-                color={selectedChat === chat ? "white" : "black"}
-                px={3}
-                py={3}
-                borderRadius="lg"
-                key={chat._id}
-              >
-                <Text>
-                  {!chat.isGroupChat
-                    ? getSender(loggedUser, chat.users)
-                    : chat.chatName}
-                </Text>
-                {chat.latestMessage && (
-                  <Text fontSize="xs">
-                    {chat.latestMessage.content.length > 50
-                      ? chat.latestMessage.content.substring(0, 51) + "..."
-                      : chat.latestMessage.content}
+            {chats.map((chat) => {
+              const latest = chat.latestMessage || {};
+              const text = latest.content || "";
+              return (
+                <Box
+                  onClick={() => setSelectedChat(chat)}
+                  cursor="pointer"
+                  bg={selectedChat === chat ? "#40c0b9ff" : "#E8E8E8"}
+                  color={selectedChat === chat ? "white" : "black"}
+                  px={3}
+                  py={3}
+                  borderRadius="lg"
+                  key={chat._id}
+                >
+                  <Text fontWeight="600">
+                    {!chat.isGroupChat
+                      ? getSender(user, chat.users)
+                      : chat.chatName}
                   </Text>
-                )}
-              </Box>
-            ))}
+                  {text && (
+                    <Text fontSize="xs">
+                      {text.length > 50 ? text.substring(0, 51) + "..." : text}
+                    </Text>
+                  )}
+                </Box>
+              );
+            })}
           </Stack>
         ) : (
           <ChatLoading />

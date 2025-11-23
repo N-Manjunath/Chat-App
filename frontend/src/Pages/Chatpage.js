@@ -7,7 +7,11 @@ import { ChatState } from "../Context/ChatProvider";
 
 const Chatpage = () => {
   const [fetchAgain, setFetchAgain] = useState(false);
-  const { user } = ChatState();
+  const ctx = ChatState();
+  const user = ctx?.user;
+
+  if (!ctx) return <div>Context not ready</div>;
+  if (!user) return <div>Loading...</div>;
 
   return (
     <div style={{ width: "100%" }}>

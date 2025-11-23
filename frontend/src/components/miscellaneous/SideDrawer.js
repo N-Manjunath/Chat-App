@@ -39,12 +39,13 @@ function SideDrawer() {
   const [loadingChat, setLoadingChat] = useState(false);
 
   const {
-    setSelectedChat,
     user,
-    notification,
-    setNotification,
     chats,
     setChats,
+    selectedChat,
+    setSelectedChat,
+    notifications,
+    setNotifications,
   } = ChatState();
 
   const toast = useToast();
@@ -123,6 +124,10 @@ console.log(data);
     }
   };
 
+  const safeNotifications = Array.isArray(notifications) ? notifications : [];
+  const notifCount = safeNotifications.length;
+  const safeSearchResult = Array.isArray(searchResult) ? searchResult : [];
+
   return (
     <>
       <Box
@@ -149,19 +154,19 @@ console.log(data);
           <Menu>
             <MenuButton p={1}>
               <NotificationBadge
-                count={notification.length}
+                count={notifCount}
                 effect={Effect.SCALE}
               />
               <BellIcon fontSize="2xl" m={1} />
             </MenuButton>
             <MenuList pl={2}>
-              {!notification.length && "No New Messages"}
-              {notification.map((notif) => (
+              {!safeNotifications.length && "No New Messages"}
+              {safeNotifications.map((notif) => (
                 <MenuItem
                   key={notif._id}
                   onClick={() => {
                     setSelectedChat(notif.chat);
-                    setNotification(notification.filter((n) => n !== notif));
+                    setNotifications(prev => prev.filter(n => n._id !== notif._id));
                   }}
                 >
                   {notif.chat.isGroupChat
@@ -208,7 +213,7 @@ console.log(data);
             {loading ? (
               <ChatLoading />
             ) : (
-              searchResult?.map((user) => (
+              safeSearchResult?.map((user) => (
                 <UserListItem
                   key={user._id}
                   user={user}
